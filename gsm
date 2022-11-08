@@ -1,0 +1,230 @@
+#define DE_RE_PIN 14
+#define MODE_SEND HIGH
+#define MODE_RECV LOW
+uint8_t Re_message[32];
+#define TINY_GSM_MODEM_SIM800
+#define SerialMon Serial
+#define SerialAT Serial1
+#define TINY_GSM_DEBUG SerialMon
+#define GSM_PIN ""
+
+const char apn[] = "internet.tn"; 
+const char gprsUser[] = "";
+const char gprsPass[] = "";
+
+const char simPIN[]   = "";
+
+const char* broker = "broker.hivemq.com";                    // Public IP address or domain name
+
+const char* topicOutput1 = "esp32gsm";
+
+#include <TinyGsmClient.h>
+
+#ifdef DUMP_AT_COMMANDS
+  #include <StreamDebugger.h>
+  StreamDebugger debugger(SerialAT, SerialMon);
+  TinyGsm modem(debugger);
+#else
+  TinyGsm modem(SerialAT);
+#endif
+
+#include <PubSubClient.h>
+
+TinyGsmClient client(modem);
+PubSubClient mqtt(client);
+
+
+// TTGO T-Call pins
+#define MODEM_RST            5
+#define MODEM_PWKEY          4
+#define MODEM_POWER_ON       23
+#define MODEM_TX             27
+#define MODEM_RX             26
+#define I2C_SDA              21
+#define I2C_SCL              22
+
+uint32_t lastReconnectAttempt = 0;
+
+#define IP5306_ADDR          0x75
+#define IP5306_REG_SYS_CTL0  0x00
+
+long lastMsg = 0;
+long lastMsg2 = 0;
+float reading = 0.0;
+
+void mqttCallback(char* topic, byte* message, unsigned int len) {
+  Serial.print("Message arrived on topic: ");
+  Serial.print(topic);
+  Serial.print(". Message: ");
+  String messageTemp;
+  
+  for (int i = 0; i < len; i++) {
+    Serial.print((char)message[i]);
+    messageTemp += (char)message[i];
+  }
+  Serial.println();
+}
+
+boolean mqttConnect() {
+  SerialMon.print("Connecting to ");
+  SerialMon.print(broker);
+
+  // Connect to MQTT Broker without username and password
+  boolean status = mqtt.connect("GsmClientN");
+
+  if (status == false) {
+    SerialMon.println(" fail");
+    ESP.restart();
+    return false;
+  }
+  SerialMon.println(" success");
+  mqtt.subscribe(topicOutput1);
+
+  return mqtt.connected();
+}
+
+
+void setup()
+{
+  //pinMode (2, OUTPUT);
+  pinMode(DE_RE_PIN, OUTPUT);
+  digitalWrite(DE_RE_PIN, MODE_SEND);
+  Serial.begin(115200);
+  Serial2.begin(9600, SERIAL_8N1, 25, 33); // Rx, Tx
+ // Serial2.setTimeout(200);
+ SerialMon.begin(115200);
+}
+
+void loop()         //sensor reads data every 6 seconds during 3 seconds 
+{
+  char value[1];
+  long now = millis();
+  if (now - lastMsg > 6000) {
+    lastMsg = now;
+    delay(20);
+    long now2 = millis();
+    while(millis() < (now2+3000)){
+      //lastMsg2 = now2;
+      delay(100);
+  digitalWrite(DE_RE_PIN, MODE_SEND);
+  byte message[] = {0xF0, 0x06, 0x01, 0x01, 0x01, 0x79};
+  Serial2.write(message, sizeof(message));
+  Serial2.flush();
+  digitalWrite(DE_RE_PIN, MODE_RECV);
+   
+  for (int i = 0; i < 32; i++) 
+  {
+    //while (!Serial2.available()); // wait for a character
+    uint8_t incomingByte = Serial2.read();
+    //Serial.println(incomingByte);
+    Re_message[i] = incomingByte;
+    
+ 
+  }
+for(int i=0 ;i<20;i++)
+{
+int a=Re_message[i];
+
+
+if (a==46 && Re_message[i-2]==0 && Re_message[i-3]==0 && Re_message[i-4]==0 && Re_message[i-5]==0)
+{
+Serial.print(Re_message[i-1],HEX);
+Serial.print(' ');
+Serial.print(Re_message[i],HEX);
+Serial.print(' ');
+Serial.print(Re_message[i+1],HEX);
+Serial.print(' ');
+Serial.print(Re_message[i+2],HEX);
+Serial.print(' ');
+Serial.print(Re_message[i+3],HEX);
+Serial.println(' ');
+char y1=(char)Re_message[i-1];
+char y2=(char)Re_message[i];
+char y3=(char)Re_message[i+1];
+char y4=(char)Re_message[i+2];
+char y5=(char)Re_message[i+3];
+char m[10]="";
+strncpy(m,&y1,1);
+strncat(m,&y2,1);
+strncat(m,&y3,1);
+strncat(m,&y4,1);
+strncat(m,&y5,1);
+float x=atof(m);
+Serial.print(x);
+Serial.println("m");
+reading = x;
+}
+}
+memset(Re_message,0,sizeof(Re_message));   
+    }
+    Serial.print("Last reading is :");
+    Serial.println(reading);
+
+    SerialMon.begin(115200);
+  delay(10);
+
+  pinMode(MODEM_PWKEY, OUTPUT);
+  pinMode(MODEM_RST, OUTPUT);
+  pinMode(MODEM_POWER_ON, OUTPUT);
+  digitalWrite(MODEM_PWKEY, LOW);
+  digitalWrite(MODEM_RST, HIGH);
+  digitalWrite(MODEM_POWER_ON, HIGH);
+
+  SerialMon.println("Wait...");
+
+  SerialAT.begin(115200, SERIAL_8N1, MODEM_RX, MODEM_TX);
+  delay(1000);
+
+  SerialMon.println("Initializing modem...");
+  //modem.restart();
+  modem.init();
+
+  String modemInfo = modem.getModemInfo();
+  SerialMon.print("Modem Info: ");
+  SerialMon.println(modemInfo);
+
+   if ( GSM_PIN && modem.getSimStatus() != 3 ) {
+    modem.simUnlock(GSM_PIN);
+  }
+
+  SerialMon.print("Connecting to APN: ");
+  SerialMon.print(apn);
+  if (!modem.gprsConnect(apn, gprsUser, gprsPass)) {
+    SerialMon.println(" fail");
+    ESP.restart();
+  }
+  else {
+    SerialMon.println(" OK");
+  }
+  
+  if (modem.isGprsConnected()) {
+    SerialMon.println("GPRS connected");
+  }
+
+  mqtt.setServer(broker, 1883);
+  mqtt.setCallback(mqttCallback);
+  if (!mqtt.connected()) {
+    SerialMon.println("=== MQTT NOT CONNECTED ===");
+    // Reconnect every 10 seconds
+    uint32_t t = millis();
+    if (t - lastReconnectAttempt > 10000L) {
+      //mqtt.publish("testgsmclient", dtostrf(reading, 2, 2, value)); 
+  //Serial.print("value to send is :") ;
+  //Serial.println(dtostrf(reading, 2, 2, value));
+      lastReconnectAttempt = t;
+      if (mqttConnect()) {
+        lastReconnectAttempt = 0;
+      }
+    }
+    delay(100);
+    mqtt.publish("testgsmclient", dtostrf(reading, 2, 2, value));
+    return;
+  }
+  /*mqtt.publish("testgsmclient", dtostrf(reading, 2, 2, value)); 
+  Serial.print("value to send is :") ;
+  Serial.println(dtostrf(reading, 2, 2, value));*/
+  }
+  
+//delay(1000);
+}
+
